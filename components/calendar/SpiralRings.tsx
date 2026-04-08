@@ -7,7 +7,7 @@ const TARNISH_VARIANTS = [
   { hi: "#e0eaf2", mid: "#b0c4d0", shadow: "#3c4c58" },
   { hi: "#c8d8e8", mid: "#92aaba", shadow: "#28363e" },
 ];
-
+//@ts-ignore
 function CoilRing({ index}) {
   const id = `cr${index}`;
   const tarnish = TARNISH_VARIANTS[index % TARNISH_VARIANTS.length];

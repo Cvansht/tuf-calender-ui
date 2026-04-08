@@ -6,7 +6,8 @@ import {
   AnimatePresence,
   motion,
   useMotionValue,
-  useTransform
+  useMotionValueEvent,
+  useTransform,
 } from "motion/react";
 
 import { CalendarBody } from "./CalendarBody";
@@ -19,15 +20,22 @@ import { buildMonthDays, formatRangeLabel, getMonthKey } from "./utils/date";
 const monthStorageKey = "wall-calendar-month-notes";
 const rangeStorageKey = "wall-calendar-range-notes";
 const importantDateStorageKey = "wall-calendar-important-dates";
-const DRAG_FLIP_THRESHOLD = 118;
-const WHEEL_FLIP_THRESHOLD = 95;
-const FLIP_LOCK_MS = 1150;
+const DRAG_FLIP_THRESHOLD = 112;
+const WHEEL_FLIP_THRESHOLD = 90;
+const FLIP_LOCK_MS = 980;
+
+/* --- Paper-physics timing -----------------------------------------------
+   Exit  : page peels off the bar slowly, then accelerates away over the top.
+           Real paper has inertia - it resists leaving the surface.
+   Enter : page swoops in from behind the bar (unseen), then falls with a
+           heavy spring. Mass 1.7 + damping 16 -> slight over-shoot "thwap".
+   Drag  : tilt/lift/shadow all react proportionally to finger displacement.
+------------------------------------------------------------------------- */
+
+const EXIT_EASE: [number, number, number, number] = [0.32, 0, 0.72, 0.18];
 
 const getStoredRecord = (key: string) => {
-  if (typeof window === "undefined") {
-    return {};
-  }
-
+  if (typeof window === "undefined") return {};
   const value = window.localStorage.getItem(key);
   return value ? (JSON.parse(value) as Record<string, string>) : {};
 };
@@ -36,7 +44,7 @@ const formatNoteDate = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
-    year: "numeric"
+    year: "numeric",
   });
 
 const toRgba = (hex: string, alpha: number) => {
@@ -45,22 +53,19 @@ const toRgba = (hex: string, alpha: number) => {
     normalized.length === 3
       ? normalized
           .split("")
-          .map((part) => `${part}${part}`)
+          .map((p) => `${p}${p}`)
           .join("")
       : normalized;
-
   const value = Number.parseInt(safe, 16);
-  const red = (value >> 16) & 255;
-  const green = (value >> 8) & 255;
-  const blue = value & 255;
-
-  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+  return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
 };
 
 export function WallCalendar() {
   const today = useMemo(() => new Date(), []);
   const [visibleMonth, setVisibleMonth] = useState(() => new Date(2022, 0, 1));
-  const [backgroundMonth, setBackgroundMonth] = useState(() => new Date(2022, 0, 1));
+  const [backgroundMonth, setBackgroundMonth] = useState(
+    () => new Date(2022, 0, 1)
+  );
   const [rangeStart, setRangeStart] = useState<string | null>(null);
   const [rangeEnd, setRangeEnd] = useState<string | null>(null);
   const [previewEnd, setPreviewEnd] = useState<string | null>(null);
@@ -77,15 +82,45 @@ export function WallCalendar() {
     "range"
   );
   const [direction, setDirection] = useState(0);
+  const [isFlipping, setIsFlipping] = useState(false);
+
   const isFlippingRef = useRef(false);
   const flipUnlockTimeoutRef = useRef<number | null>(null);
   const wheelAccumulatorRef = useRef(0);
   const wheelDirectionRef = useRef<1 | -1 | 0>(0);
   const wheelResetTimeoutRef = useRef<number | null>(null);
+
+  // -- Drag motion values ------------------------------------------------
   const dragY = useMotionValue(0);
-  const dragRotate = useTransform(dragY, [-140, 0, 140], [4.5, 0, -4.5]);
-  const dragLift = useTransform(dragY, [-140, 0, 140], [3, 0, -2]);
-  const dragScale = useTransform(dragY, [-140, 0, 140], [0.998, 1, 0.999]);
+
+  // Page tilts around the top binding as you pull it down/up
+  const dragRotate = useTransform(dragY, [-140, 0, 140], [6.5, 0, -6.5]);
+
+  // Slight upward / downward lift
+  const dragLift = useTransform(dragY, [-140, 0, 140], [5, 0, -3]);
+
+  // Very subtle scale to sell the perspective recede
+  const dragScale = useTransform(dragY, [-140, 0, 140], [0.9965, 1, 0.998]);
+
+  // Shadow opacity: increases the more the page is pulled
+  const dragShadowOpacity = useTransform(
+    dragY,
+    [-140, -60, 0, 60, 140],
+    [0.28, 0.1, 0, 0.1, 0.28]
+  );
+
+  // Edge-catch highlight at top: paper edge lights up as it lifts
+  const dragEdgeHighlight = useTransform(
+    dragY,
+    [-140, -20, 0, 20, 140],
+    [0.9, 0.4, 0, 0.4, 0.9]
+  );
+
+  // Keep isFlipping state in sync so the shadow re-renders
+  useMotionValueEvent(dragY, "change", (v) => {
+    if (Math.abs(v) > 18 && !isFlipping) setIsFlipping(true);
+    if (Math.abs(v) < 4 && isFlipping) setIsFlipping(false);
+  });
 
   const monthTheme = useMemo(
     () => getMonthTheme(visibleMonth.getMonth()),
@@ -95,6 +130,7 @@ export function WallCalendar() {
     () => getMonthTheme(backgroundMonth.getMonth()),
     [backgroundMonth]
   );
+
   const monthKey = getMonthKey(visibleMonth);
   const days = useMemo(() => buildMonthDays(visibleMonth), [visibleMonth]);
   const holidays = holidaysByMonth[visibleMonth.getMonth()] ?? [];
@@ -110,27 +146,19 @@ export function WallCalendar() {
         ? formatRangeLabel(rangeStart)
         : null;
   const importantDateLabel = importantDate ? formatNoteDate(importantDate) : null;
+
   const pageBackground = useMemo(
     () =>
       [
         "radial-gradient(circle at 18% 14%, rgba(255,255,255,0.92), transparent 24%)",
-        `radial-gradient(circle at 84% 10%, ${toRgba(
-          backgroundTheme.accentSoft,
-          0.92
-        )}, transparent 28%)`,
-        `linear-gradient(180deg, #f7f3ec 0%, ${toRgba(
-          backgroundTheme.accentSoft,
-          0.82
-        )} 56%, ${toRgba(backgroundTheme.rightAccent, 0.18)} 100%)`
+        `radial-gradient(circle at 84% 10%, ${toRgba(backgroundTheme.accentSoft, 0.92)}, transparent 28%)`,
+        `linear-gradient(180deg, #f7f3ec 0%, ${toRgba(backgroundTheme.accentSoft, 0.82)} 56%, ${toRgba(backgroundTheme.rightAccent, 0.18)} 100%)`,
       ].join(", "),
     [backgroundTheme]
   );
   const pageGlow = useMemo(
     () =>
-      `radial-gradient(circle at 76% 18%, ${toRgba(
-        backgroundTheme.accent,
-        0.2
-      )} 0%, ${toRgba(backgroundTheme.leftAccent, 0.11)} 36%, transparent 70%)`,
+      `radial-gradient(circle at 76% 18%, ${toRgba(backgroundTheme.accent, 0.2)} 0%, ${toRgba(backgroundTheme.leftAccent, 0.11)} 36%, transparent 70%)`,
     [backgroundTheme]
   );
 
@@ -138,12 +166,10 @@ export function WallCalendar() {
     setMonthNotes(next);
     window.localStorage.setItem(monthStorageKey, JSON.stringify(next));
   };
-
   const persistRangeNotes = (next: Record<string, string>) => {
     setRangeNotes(next);
     window.localStorage.setItem(rangeStorageKey, JSON.stringify(next));
   };
-
   const persistImportantDates = (next: Record<string, string>) => {
     setImportantDates(next);
     window.localStorage.setItem(importantDateStorageKey, JSON.stringify(next));
@@ -151,19 +177,16 @@ export function WallCalendar() {
 
   useEffect(() => {
     return () => {
-      if (flipUnlockTimeoutRef.current) {
+      if (flipUnlockTimeoutRef.current)
         window.clearTimeout(flipUnlockTimeoutRef.current);
-      }
-
-      if (wheelResetTimeoutRef.current) {
+      if (wheelResetTimeoutRef.current)
         window.clearTimeout(wheelResetTimeoutRef.current);
-      }
     };
   }, []);
 
   const unlockFlip = () => {
     isFlippingRef.current = false;
-
+    setIsFlipping(false);
     if (flipUnlockTimeoutRef.current) {
       window.clearTimeout(flipUnlockTimeoutRef.current);
       flipUnlockTimeoutRef.current = null;
@@ -171,16 +194,13 @@ export function WallCalendar() {
   };
 
   const transitionMonth = (nextMonth: Date, nextDirection: number) => {
-    if (isFlippingRef.current) {
-      return;
-    }
-
+    if (isFlippingRef.current) return;
     isFlippingRef.current = true;
+    setIsFlipping(true);
     wheelAccumulatorRef.current = 0;
     wheelDirectionRef.current = 0;
     setDirection(nextDirection);
     setVisibleMonth(nextMonth);
-
     flipUnlockTimeoutRef.current = window.setTimeout(() => {
       unlockFlip();
       setBackgroundMonth(nextMonth);
@@ -189,60 +209,43 @@ export function WallCalendar() {
 
   const handleSelectDay = (iso: string) => {
     setPreviewEnd(null);
-
     if (selectionMode === "important") {
-      const nextImportantDates = { ...importantDates };
-
-      if (importantDate === iso) {
-        delete nextImportantDates[monthKey];
-      } else {
-        nextImportantDates[monthKey] = iso;
-      }
-
-      persistImportantDates(nextImportantDates);
+      const next = { ...importantDates };
+      if (importantDate === iso) delete next[monthKey];
+      else next[monthKey] = iso;
+      persistImportantDates(next);
       setSelectionMode("range");
       return;
     }
-
     if (!rangeStart || rangeEnd) {
       setRangeStart(iso);
       setRangeEnd(null);
       return;
     }
-
     if (iso < rangeStart) {
       setRangeEnd(rangeStart);
       setRangeStart(iso);
       return;
     }
-
-    if (iso === rangeStart) {
-      setRangeEnd(iso);
-      return;
-    }
-
     setRangeEnd(iso);
   };
 
   const handleHoverDay = (iso: string) => {
-    if (selectionMode === "range" && rangeStart && !rangeEnd) {
+    if (selectionMode === "range" && rangeStart && !rangeEnd)
       setPreviewEnd(iso);
-    }
   };
 
-  const flipToNextMonth = () => {
+  const flipToNextMonth = () =>
     transitionMonth(
       new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1),
       1
     );
-  };
 
-  const flipToPreviousMonth = () => {
+  const flipToPreviousMonth = () =>
     transitionMonth(
       new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1),
       -1
     );
-  };
 
   const handleDragEnd = (
     _: MouseEvent | TouchEvent | PointerEvent,
@@ -250,63 +253,46 @@ export function WallCalendar() {
   ) => {
     if (info.offset.y <= -DRAG_FLIP_THRESHOLD) {
       flipToNextMonth();
-      dragY.set(0);
-      return;
-    }
-
-    if (info.offset.y >= DRAG_FLIP_THRESHOLD) {
+    } else if (info.offset.y >= DRAG_FLIP_THRESHOLD) {
       flipToPreviousMonth();
     }
-
     dragY.set(0);
   };
 
   const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
-    if (isFlippingRef.current) {
-      return;
-    }
-
-    if (Math.abs(event.deltaY) < 20) {
-      return;
-    }
-
+    if (isFlippingRef.current) return;
+    if (Math.abs(event.deltaY) < 20) return;
     event.preventDefault();
     event.stopPropagation();
 
     const wheelDirection = event.deltaY > 0 ? 1 : -1;
-
-    if (wheelDirectionRef.current !== 0 && wheelDirectionRef.current !== wheelDirection) {
+    if (
+      wheelDirectionRef.current !== 0 &&
+      wheelDirectionRef.current !== wheelDirection
+    )
       wheelAccumulatorRef.current = 0;
-    }
 
     wheelDirectionRef.current = wheelDirection;
     wheelAccumulatorRef.current += Math.abs(event.deltaY);
 
-    if (wheelResetTimeoutRef.current) {
+    if (wheelResetTimeoutRef.current)
       window.clearTimeout(wheelResetTimeoutRef.current);
-    }
-
     wheelResetTimeoutRef.current = window.setTimeout(() => {
       wheelAccumulatorRef.current = 0;
       wheelDirectionRef.current = 0;
     }, 180);
 
-    if (wheelAccumulatorRef.current < WHEEL_FLIP_THRESHOLD) {
-      return;
-    }
-
+    if (wheelAccumulatorRef.current < WHEEL_FLIP_THRESHOLD) return;
     wheelAccumulatorRef.current = 0;
     wheelDirectionRef.current = 0;
 
-    if (wheelDirection > 0) {
-      flipToNextMonth();
-    } else {
-      flipToPreviousMonth();
-    }
+    if (wheelDirection > 0) flipToNextMonth();
+    else flipToPreviousMonth();
   };
 
   return (
     <>
+      {/* -- Ambient background ------------------------------------------ */}
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden print:hidden">
         <AnimatePresence initial={false} mode="wait">
           <motion.div
@@ -327,18 +313,25 @@ export function WallCalendar() {
         />
       </div>
 
+      {/* -- Calendar shell ---------------------------------------------- */}
       <section className="relative z-10 mx-auto grid w-full max-w-[540px] gap-2 md:max-w-[600px] print:max-w-none">
         <div className="rounded-[24px] bg-[linear-gradient(180deg,#fffdfa_0%,#f8f4eb_100%)] p-2 shadow-[0_18px_50px_rgba(18,33,58,0.14)] md:p-3 print:bg-white print:p-0 print:shadow-none">
           <SpiralRings />
 
+          {/*
+           * The draggable wrapper: y motion -> lift + tilt + scale.
+           * transformPerspective lives here so it's applied once to the
+           * viewport, not per-page - avoids the "wobble" you get when
+           * AnimatePresence replaces elements with their own perspective.
+           */}
           <motion.div
             className="overflow-hidden rounded-[20px] border border-slate-200/70 bg-[#fffdf8] print:rounded-none print:border-0"
             drag="y"
             dragConstraints={{ top: 0, bottom: 0 }}
-            dragElastic={0.1}
+            dragElastic={0.08}
             dragMomentum={false}
-            dragTransition={{ bounceStiffness: 180, bounceDamping: 20 }}
-            whileTap={{ cursor: "grabbing", scale: 0.998 }}
+            dragTransition={{ bounceStiffness: 220, bounceDamping: 26 }}
+            whileTap={{ cursor: "grabbing" }}
             onDrag={(_, info) => dragY.set(info.offset.y)}
             onDragEnd={handleDragEnd}
             onWheel={handleWheel}
@@ -346,68 +339,173 @@ export function WallCalendar() {
               touchAction: "none",
               y: dragLift,
               rotateX: dragRotate,
-              scale: dragScale
+              scale: dragScale,
+              transformPerspective: 2000,
+              transformOrigin: "50% 0%",
             }}
           >
-            <div className="relative overflow-hidden bg-white [perspective:1800px]">
+            {/*
+             * Perspective + clip wrapper. The `[perspective:...]` on a
+             * parent of the AnimatePresence target creates a shared
+             * vanishing point, so entering / exiting pages share the same
+             * 3-D space.
+             */}
+            <div
+              className="relative overflow-hidden bg-white"
+              style={{ perspective: "2400px", perspectiveOrigin: "50% -8%" }}
+            >
+              {/* -- "Page beneath" - visible during flip ---------------- */}
+              {/*
+               * This stationary layer mimics the next calendar page
+               * sitting on the stack. It becomes visible when the top
+               * page peels away, giving the stacked-pages illusion.
+               */}
+              <div
+                className="pointer-events-none absolute inset-0"
+                aria-hidden
+                style={{
+                  background:
+                    "linear-gradient(180deg, #f2ede4 0%, #ede8df 100%)",
+                  zIndex: 0,
+                }}
+              />
+
+              {/* -- Flip shadow (cast by the turning page) -------------- */}
+              {/*
+               * A gradient that simulates the shadow the rotating page
+               * casts downward as it lifts away from the surface.
+               * Only visible while a flip (or drag) is in progress.
+               */}
+              <motion.div
+                className="pointer-events-none absolute inset-x-0 top-0 z-30"
+                style={{
+                  height: "28%",
+                  background:
+                    "linear-gradient(180deg, rgba(0,0,0,0.26) 0%, rgba(0,0,0,0.08) 55%, transparent 100%)",
+                  opacity: isFlipping ? dragShadowOpacity : 0,
+                }}
+                animate={{ opacity: isFlipping ? 1 : 0 }}
+                transition={{ duration: isFlipping ? 0.12 : 0.38 }}
+              />
+
+              {/* -- Paper-edge catch-light ------------------------------ */}
+              {/*
+               * The very top edge of a page looks bright when it lifts
+               * (light grazes the edge of the paper). A thin 1-px line
+               * that fades in during drag/flip sells this completely.
+               */}
+              <motion.div
+                className="pointer-events-none absolute inset-x-0 top-0 z-30 h-px"
+                style={{
+                  background:
+                    "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.88) 30%, rgba(255,255,255,0.95) 50%, rgba(255,255,255,0.88) 70%, transparent 100%)",
+                  opacity: dragEdgeHighlight,
+                }}
+              />
+
+              {/* -- Animated page -------------------------------------- */}
               <AnimatePresence
                 initial={false}
                 custom={direction}
                 mode="wait"
-                onExitComplete={() => {
-                  setBackgroundMonth(visibleMonth);
-                }}
+                onExitComplete={() => setBackgroundMonth(visibleMonth)}
               >
                 <motion.div
                   key={`${visibleMonth.getFullYear()}-${visibleMonth.getMonth()}`}
                   custom={direction}
-                  style={{ transformStyle: "preserve-3d" }}
+                  className="relative z-10 origin-top will-change-transform"
+                  style={{
+                    transformStyle: "preserve-3d",
+                    backfaceVisibility: "hidden",
+                    WebkitBackfaceVisibility: "hidden",
+                  }}
+                  /*
+                   * ENTER - the page arrives from behind the spiral bar.
+                   * It starts fully rotated away (96 deg) so it's hidden,
+                   * then a heavy spring lets it fall into place.
+                   *
+                   * Spring anatomy:
+                   *   stiffness 60 -> slow, deliberate landing
+                   *   damping   16 -> slight over-shoot ("thwap" feel)
+                   *   mass      1.7 -> the paper is heavy
+                   *
+                   * opacity snaps to 1 in 80ms so the page appears to
+                   * materialise from behind the binding rather than
+                   * cross-fading in from nothing.
+                   */
                   initial={{
-                    rotateX: direction >= 0 ? 78 : -78,
-                    opacity: 0.42,
-                    y: direction >= 0 ? -16 : 16,
-                    scale: 0.992,
-                    transformPerspective: 1800
+                    rotateX: direction >= 0 ? 97 : -97,
+                    opacity: 0,
+                    scale: 0.982,
                   }}
                   animate={{
                     rotateX: 0,
                     opacity: 1,
-                    y: 0,
                     scale: 1,
                     transition: {
                       rotateX: {
                         type: "spring",
-                        stiffness: 88,
-                        damping: 18,
-                        mass: 1.18
+                        stiffness: 60,
+                        damping: 16,
+                        mass: 1.7,
                       },
-                      y: {
-                        type: "spring",
-                        stiffness: 96,
-                        damping: 17,
-                        mass: 1.06
+                      opacity: {
+                        duration: 0.07,
+                        ease: "linear",
                       },
                       scale: {
                         type: "spring",
-                        stiffness: 100,
-                        damping: 19,
-                        mass: 1
+                        stiffness: 82,
+                        damping: 22,
+                        mass: 1.1,
                       },
-                      opacity: { duration: 0.56, ease: [0.22, 1, 0.36, 1] }
-                    }
+                    },
                   }}
+                  /*
+                   * EXIT - the page peels off and flips over the bar.
+                   *
+                   * EXIT_EASE [0.32, 0, 0.72, 0.18]:
+                   *   - Starts relatively slow (inertia of paper at rest)
+                   *   - Accelerates through mid-flight
+                   *   - Slight ease-out at the very end (dampened by air)
+                   * This curve is the single biggest realism improvement
+                   * vs a linear or standard ease-in-out.
+                   *
+                   * opacity goes to 0.04 (not 0) so the very last trace of
+                   * the page is visible above the bar - exactly like a
+                   * physical calendar page disappearing over the binding.
+                   */
                   exit={{
-                    rotateX: direction >= 0 ? -72 : 72,
-                    opacity: 0.14,
-                    y: direction >= 0 ? 14 : -14,
-                    scale: 0.992,
+                    rotateX: direction >= 0 ? -86 : 86,
+                    opacity: 0.04,
+                    scale: 0.988,
                     transition: {
-                      duration: 0.5,
-                      ease: [0.32, 0, 0.2, 1]
-                    }
+                      duration: 0.41,
+                      ease: EXIT_EASE,
+                    },
                   }}
-                  className="origin-top will-change-transform"
+                  onAnimationStart={() => setIsFlipping(true)}
+                  onAnimationComplete={() => {
+                    /* Only clear flipping state on the enter-complete,
+                       not on exit-complete (AnimatePresence fires both). */
+                    if (!isFlippingRef.current) setIsFlipping(false);
+                  }}
                 >
+                  {/*
+                   * Inner surface shadow:
+                   * A real page has slight darkening near the binding edge
+                   * (the paper bends slightly where it's punched / coiled).
+                   * This is a purely additive detail - it never moves.
+                   */}
+                  <div
+                    className="pointer-events-none absolute inset-x-0 top-0 z-20 h-6"
+                    style={{
+                      background:
+                        "linear-gradient(180deg, rgba(0,0,0,0.055) 0%, transparent 100%)",
+                    }}
+                    aria-hidden
+                  />
+
                   <HeroScene
                     monthLabel={visibleMonth
                       .toLocaleString("en-US", { month: "long" })
@@ -440,31 +538,25 @@ export function WallCalendar() {
                       onHoverDay={handleHoverDay}
                       onSelectionModeChange={setSelectionMode}
                       onClearImportantDate={() => {
-                        const nextImportantDates = { ...importantDates };
-                        delete nextImportantDates[monthKey];
-                        persistImportantDates(nextImportantDates);
+                        const next = { ...importantDates };
+                        delete next[monthKey];
+                        persistImportantDates(next);
                         setSelectionMode("range");
                       }}
                       onMonthNoteChange={(value) =>
-                        persistMonthNotes({
-                          ...monthNotes,
-                          [monthKey]: value
-                        })
+                        persistMonthNotes({ ...monthNotes, [monthKey]: value })
                       }
                       onRangeNoteChange={(value) =>
                         persistRangeNotes({
                           ...rangeNotes,
-                          [selectedRangeKey]: value
+                          [selectedRangeKey]: value,
                         })
                       }
                       onResetNotes={() => {
-                        persistMonthNotes({
-                          ...monthNotes,
-                          [monthKey]: ""
-                        });
+                        persistMonthNotes({ ...monthNotes, [monthKey]: "" });
                         persistRangeNotes({
                           ...rangeNotes,
-                          [selectedRangeKey]: ""
+                          [selectedRangeKey]: "",
                         });
                       }}
                     />
