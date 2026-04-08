@@ -1,0 +1,57 @@
+<svg width="1600" height="1080" viewBox="0 0 1600 1080" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sky" x1="800" y1="0" x2="800" y2="1080" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7FAFF"/>
+      <stop offset="0.64" stop-color="#EAF1FA"/>
+      <stop offset="1" stop-color="#D9E5F4"/>
+    </linearGradient>
+    <linearGradient id="rock" x1="932" y1="350" x2="1068" y2="1022" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#96A4B3"/>
+      <stop offset="0.45" stop-color="#7A8796"/>
+      <stop offset="1" stop-color="#616B78"/>
+    </linearGradient>
+    <filter id="grain" x="-20%" y="-20%" width="140%" height="140%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.95" numOctaves="2" seed="7" result="noise"/>
+      <feColorMatrix in="noise" type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="table" tableValues="0 0.08"/>
+      </feComponentTransfer>
+      <feBlend in2="SourceGraphic" mode="multiply"/>
+    </filter>
+    <filter id="soften" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1080" fill="url(#sky)"/>
+
+  <g opacity="0.9" filter="url(#soften)">
+    <ellipse cx="352" cy="140" rx="410" ry="132" fill="#FBFDFF"/>
+    <ellipse cx="1012" cy="196" rx="510" ry="158" fill="#FAFCFF"/>
+    <ellipse cx="1188" cy="136" rx="240" ry="124" fill="#FFF1BA" opacity="0.38"/>
+  </g>
+
+  <path d="M0 735L186 690L348 702L520 664L634 676L754 624L878 642L974 610L1090 620L1224 574L1382 564L1600 536V1080H0V735Z" fill="#314968"/>
+  <path d="M0 796L164 742L330 760L518 728L630 738L746 690L878 714L1000 670L1138 690L1290 642L1454 624L1600 696V1080H0V796Z" fill="#223650"/>
+
+  <g filter="url(#grain)">
+    <path d="M258 1006L1546 412L1600 412V1080H258V1006Z" fill="url(#rock)"/>
+    <path d="M206 1080L384 978L780 834L1046 688L1600 432V1080H206Z" fill="#8794A2" opacity="0.7"/>
+    <path d="M462 1076L586 1000L808 880L1120 720L1480 548" stroke="#B9C4CF" stroke-width="8" stroke-linecap="round" opacity="0.42"/>
+    <path d="M552 1040L654 986L944 818L1282 624" stroke="#E1E6EC" stroke-width="5" stroke-linecap="round" opacity="0.34"/>
+    <path d="M608 930L764 840L996 708L1322 520" stroke="#CAD3DD" stroke-width="10" stroke-linecap="round" opacity="0.26"/>
+    <path d="M816 736L948 686L1112 586L1240 516" stroke="#566476" stroke-width="12" stroke-linecap="round" opacity="0.28"/>
+    <path d="M730 834L834 778L1012 674L1218 560" stroke="#758294" stroke-width="7" stroke-linecap="round" opacity="0.28"/>
+  </g>
+
+  <g transform="translate(884 544)">
+    <ellipse cx="0" cy="82" rx="42" ry="14" fill="#2A3341" opacity="0.18"/>
+    <circle cx="16" cy="-26" r="15" fill="#1E2430"/>
+    <path d="M0 0L56 18L74 -34L18 -60L0 0Z" fill="#D64840"/>
+    <path d="M14 -8L66 18L94 4L46 -26L14 -8Z" fill="#F46A5A"/>
+    <path d="M10 -4L-18 86H24L56 10L10 -4Z" fill="#2F3948"/>
+    <path d="M42 8L76 84L112 60L72 -4L42 8Z" fill="#3A4556"/>
+    <path d="M86 -40L132 -102L142 -92L108 -24L86 -40Z" fill="#2E3949"/>
+    <path d="M134 -108L156 -122L162 -112L144 -98L134 -108Z" fill="#5D6673"/>
+  </g>
+</svg>
