@@ -91,8 +91,8 @@ export function CalendarGrid({
   const labels = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 
   return (
-    <div className="px-4 pt-3 pb-4 md:px-7 md:pt-4 md:pb-5">
-      <div className="mb-2 grid grid-cols-7 gap-x-1">
+    <div className="px-4 pt-2.5 pb-3 md:px-6 md:pt-3 md:pb-4">
+      <div className="mb-1.5 grid grid-cols-7 gap-x-1">
         {labels.map((label, index) => (
           <div
             key={`${label}-${index}`}
@@ -105,7 +105,7 @@ export function CalendarGrid({
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-y-1 md:gap-y-1.5">
+      <div className="grid grid-cols-7 gap-y-0.5 md:gap-y-1">
         {days.map((day) => (
           <DayCell
             key={day.iso}

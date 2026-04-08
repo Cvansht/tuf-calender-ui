@@ -17,12 +17,6 @@ type CalendarBodyProps = {
   monthNote: string;
   rangeNote: string;
   selectedRangeLabel: string | null;
-  selectedRangeDates:
-    | {
-        startLabel: string;
-        endLabel: string | null;
-      }
-    | null;
   importantDate: string | null;
   importantDateLabel: string | null;
   selectionMode: SelectionMode;
@@ -43,7 +37,6 @@ export function CalendarBody(props: CalendarBodyProps) {
           monthNote={props.monthNote}
           rangeNote={props.rangeNote}
           selectedRangeLabel={props.selectedRangeLabel}
-          selectedRangeDates={props.selectedRangeDates}
           importantDateLabel={props.importantDateLabel}
           selectionMode={props.selectionMode}
           accent={props.accent}

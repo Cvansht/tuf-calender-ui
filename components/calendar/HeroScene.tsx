@@ -29,7 +29,7 @@ export function HeroScene({
   theme
 }: HeroSceneProps) {
   return (
-    <div className="relative h-[258px] bg-white md:h-[384px] print:hidden">
+    <div className="relative h-[240px] bg-white md:h-[350px] print:hidden">
       <div
         key={animateKey}
         className="absolute inset-0 overflow-hidden rounded-t-[22px]"
@@ -68,7 +68,7 @@ export function HeroScene({
 
         <motion.div
           aria-hidden="true"
-          className="absolute left-0 bottom-0 z-10 h-[94px] w-[24%] md:h-[132px]"
+          className="absolute left-0 bottom-0 z-10 h-[84px] w-[24%] md:h-[116px]"
           style={{
             background: theme.leftAccent,
             clipPath: "polygon(0 46%, 100% 100%, 0 100%)"
@@ -79,7 +79,7 @@ export function HeroScene({
 
         <motion.div
           aria-hidden="true"
-          className="absolute right-0 bottom-0 z-10 h-[148px] w-[48%] md:h-[210px]"
+          className="absolute right-0 bottom-0 z-10 h-[132px] w-[48%] md:h-[188px]"
           style={{
             background: theme.rightAccent,
             clipPath: "polygon(0 100%, 100% 21%, 100% 100%)"
@@ -89,12 +89,12 @@ export function HeroScene({
         />
 
         <motion.div
-          className="absolute right-[7%] bottom-[20%] z-20 flex max-w-[168px] flex-col items-end text-right text-white md:right-[8%] md:bottom-[18%] md:max-w-[245px]"
+          className="absolute right-[7%] bottom-[18%] z-20 flex max-w-[164px] flex-col items-end text-right text-white md:right-[8%] md:bottom-[16%] md:max-w-[225px]"
           initial={{ opacity: 0, x: 10 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.72, ease: [0.22, 1, 0.36, 1] }}
         >
-          <p className="text-[0.96rem] leading-none tracking-[0.03em] text-white/95 drop-shadow-[0_1px_3px_rgba(0,0,0,0.28)] md:text-[1.46rem]">
+          <p className="text-[0.92rem] leading-none tracking-[0.03em] text-white/95 drop-shadow-[0_1px_3px_rgba(0,0,0,0.28)] md:text-[1.34rem]">
             {year}
           </p>
           <h2

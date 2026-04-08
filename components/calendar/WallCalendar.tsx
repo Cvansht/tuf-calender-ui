@@ -1,7 +1,7 @@
 "use client";
 
 import type { WheelEvent } from "react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AnimatePresence,
   motion,
@@ -19,6 +19,9 @@ import { buildMonthDays, formatRangeLabel, getMonthKey } from "./utils/date";
 const monthStorageKey = "wall-calendar-month-notes";
 const rangeStorageKey = "wall-calendar-range-notes";
 const importantDateStorageKey = "wall-calendar-important-dates";
+const DRAG_FLIP_THRESHOLD = 118;
+const WHEEL_FLIP_THRESHOLD = 95;
+const FLIP_LOCK_MS = 1150;
 
 const getStoredRecord = (key: string) => {
   if (typeof window === "undefined") {
@@ -57,6 +60,7 @@ const toRgba = (hex: string, alpha: number) => {
 export function WallCalendar() {
   const today = useMemo(() => new Date(), []);
   const [visibleMonth, setVisibleMonth] = useState(() => new Date(2022, 0, 1));
+  const [backgroundMonth, setBackgroundMonth] = useState(() => new Date(2022, 0, 1));
   const [rangeStart, setRangeStart] = useState<string | null>(null);
   const [rangeEnd, setRangeEnd] = useState<string | null>(null);
   const [previewEnd, setPreviewEnd] = useState<string | null>(null);
@@ -73,15 +77,23 @@ export function WallCalendar() {
     "range"
   );
   const [direction, setDirection] = useState(0);
-  const wheelLockRef = useRef(false);
+  const isFlippingRef = useRef(false);
+  const flipUnlockTimeoutRef = useRef<number | null>(null);
+  const wheelAccumulatorRef = useRef(0);
+  const wheelDirectionRef = useRef<1 | -1 | 0>(0);
+  const wheelResetTimeoutRef = useRef<number | null>(null);
   const dragY = useMotionValue(0);
-  const dragRotate = useTransform(dragY, [-180, 0, 180], [7, 0, -7]);
-  const dragLift = useTransform(dragY, [-180, 0, 180], [6, 0, -3]);
-  const dragScale = useTransform(dragY, [-180, 0, 180], [0.996, 1, 0.998]);
+  const dragRotate = useTransform(dragY, [-140, 0, 140], [4.5, 0, -4.5]);
+  const dragLift = useTransform(dragY, [-140, 0, 140], [3, 0, -2]);
+  const dragScale = useTransform(dragY, [-140, 0, 140], [0.998, 1, 0.999]);
 
   const monthTheme = useMemo(
     () => getMonthTheme(visibleMonth.getMonth()),
     [visibleMonth]
+  );
+  const backgroundTheme = useMemo(
+    () => getMonthTheme(backgroundMonth.getMonth()),
+    [backgroundMonth]
   );
   const monthKey = getMonthKey(visibleMonth);
   const days = useMemo(() => buildMonthDays(visibleMonth), [visibleMonth]);
@@ -97,41 +109,29 @@ export function WallCalendar() {
       : rangeStart
         ? formatRangeLabel(rangeStart)
         : null;
-  const selectedRangeDates =
-    rangeStart && (rangeEnd || previewEnd)
-      ? {
-          startLabel: formatNoteDate(rangeStart),
-          endLabel: formatNoteDate(rangeEnd ?? previewEnd ?? rangeStart)
-        }
-      : rangeStart
-        ? {
-            startLabel: formatNoteDate(rangeStart),
-            endLabel: null
-          }
-        : null;
   const importantDateLabel = importantDate ? formatNoteDate(importantDate) : null;
   const pageBackground = useMemo(
     () =>
       [
         "radial-gradient(circle at 18% 14%, rgba(255,255,255,0.92), transparent 24%)",
         `radial-gradient(circle at 84% 10%, ${toRgba(
-          monthTheme.accentSoft,
+          backgroundTheme.accentSoft,
           0.92
         )}, transparent 28%)`,
         `linear-gradient(180deg, #f7f3ec 0%, ${toRgba(
-          monthTheme.accentSoft,
+          backgroundTheme.accentSoft,
           0.82
-        )} 56%, ${toRgba(monthTheme.rightAccent, 0.18)} 100%)`
+        )} 56%, ${toRgba(backgroundTheme.rightAccent, 0.18)} 100%)`
       ].join(", "),
-    [monthTheme]
+    [backgroundTheme]
   );
   const pageGlow = useMemo(
     () =>
       `radial-gradient(circle at 76% 18%, ${toRgba(
-        monthTheme.accent,
+        backgroundTheme.accent,
         0.2
-      )} 0%, ${toRgba(monthTheme.leftAccent, 0.11)} 36%, transparent 70%)`,
-    [monthTheme]
+      )} 0%, ${toRgba(backgroundTheme.leftAccent, 0.11)} 36%, transparent 70%)`,
+    [backgroundTheme]
   );
 
   const persistMonthNotes = (next: Record<string, string>) => {
@@ -149,31 +149,42 @@ export function WallCalendar() {
     window.localStorage.setItem(importantDateStorageKey, JSON.stringify(next));
   };
 
-  const ensureRangeNoteSeeded = (startIso: string, endIso: string) => {
-    const start = startIso < endIso ? startIso : endIso;
-    const end = startIso < endIso ? endIso : startIso;
-    const key = `${start}_${end}`;
-
-    setRangeNotes((previous) => {
-      if (previous[key] !== undefined) {
-        return previous;
+  useEffect(() => {
+    return () => {
+      if (flipUnlockTimeoutRef.current) {
+        window.clearTimeout(flipUnlockTimeoutRef.current);
       }
 
-      const next = {
-        ...previous,
-        [key]: `Selected range\nStart: ${formatNoteDate(start)}\nEnd: ${formatNoteDate(
-          end
-        )}\n\nNotes:\n`
-      };
+      if (wheelResetTimeoutRef.current) {
+        window.clearTimeout(wheelResetTimeoutRef.current);
+      }
+    };
+  }, []);
 
-      window.localStorage.setItem(rangeStorageKey, JSON.stringify(next));
-      return next;
-    });
+  const unlockFlip = () => {
+    isFlippingRef.current = false;
+
+    if (flipUnlockTimeoutRef.current) {
+      window.clearTimeout(flipUnlockTimeoutRef.current);
+      flipUnlockTimeoutRef.current = null;
+    }
   };
 
   const transitionMonth = (nextMonth: Date, nextDirection: number) => {
+    if (isFlippingRef.current) {
+      return;
+    }
+
+    isFlippingRef.current = true;
+    wheelAccumulatorRef.current = 0;
+    wheelDirectionRef.current = 0;
     setDirection(nextDirection);
     setVisibleMonth(nextMonth);
+
+    flipUnlockTimeoutRef.current = window.setTimeout(() => {
+      unlockFlip();
+      setBackgroundMonth(nextMonth);
+    }, FLIP_LOCK_MS);
   };
 
   const handleSelectDay = (iso: string) => {
@@ -202,18 +213,15 @@ export function WallCalendar() {
     if (iso < rangeStart) {
       setRangeEnd(rangeStart);
       setRangeStart(iso);
-      ensureRangeNoteSeeded(iso, rangeStart);
       return;
     }
 
     if (iso === rangeStart) {
       setRangeEnd(iso);
-      ensureRangeNoteSeeded(iso, iso);
       return;
     }
 
     setRangeEnd(iso);
-    ensureRangeNoteSeeded(rangeStart, iso);
   };
 
   const handleHoverDay = (iso: string) => {
@@ -240,13 +248,13 @@ export function WallCalendar() {
     _: MouseEvent | TouchEvent | PointerEvent,
     info: { offset: { y: number } }
   ) => {
-    if (info.offset.y <= -70) {
+    if (info.offset.y <= -DRAG_FLIP_THRESHOLD) {
       flipToNextMonth();
       dragY.set(0);
       return;
     }
 
-    if (info.offset.y >= 70) {
+    if (info.offset.y >= DRAG_FLIP_THRESHOLD) {
       flipToPreviousMonth();
     }
 
@@ -254,7 +262,7 @@ export function WallCalendar() {
   };
 
   const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
-    if (wheelLockRef.current) {
+    if (isFlippingRef.current) {
       return;
     }
 
@@ -262,17 +270,39 @@ export function WallCalendar() {
       return;
     }
 
-    wheelLockRef.current = true;
+    event.preventDefault();
+    event.stopPropagation();
 
-    if (event.deltaY > 0) {
+    const wheelDirection = event.deltaY > 0 ? 1 : -1;
+
+    if (wheelDirectionRef.current !== 0 && wheelDirectionRef.current !== wheelDirection) {
+      wheelAccumulatorRef.current = 0;
+    }
+
+    wheelDirectionRef.current = wheelDirection;
+    wheelAccumulatorRef.current += Math.abs(event.deltaY);
+
+    if (wheelResetTimeoutRef.current) {
+      window.clearTimeout(wheelResetTimeoutRef.current);
+    }
+
+    wheelResetTimeoutRef.current = window.setTimeout(() => {
+      wheelAccumulatorRef.current = 0;
+      wheelDirectionRef.current = 0;
+    }, 180);
+
+    if (wheelAccumulatorRef.current < WHEEL_FLIP_THRESHOLD) {
+      return;
+    }
+
+    wheelAccumulatorRef.current = 0;
+    wheelDirectionRef.current = 0;
+
+    if (wheelDirection > 0) {
       flipToNextMonth();
     } else {
       flipToPreviousMonth();
     }
-
-    window.setTimeout(() => {
-      wheelLockRef.current = false;
-    }, 720);
   };
 
   return (
@@ -280,12 +310,12 @@ export function WallCalendar() {
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden print:hidden">
         <AnimatePresence initial={false} mode="wait">
           <motion.div
-            key={`page-${monthTheme.id}`}
+            key={`page-${backgroundTheme.id}`}
             className="absolute inset-0"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 1.15, ease: [0.22, 1, 0.36, 1] }}
+            transition={{ duration: 0.72, ease: [0.22, 1, 0.36, 1] }}
             style={{ background: pageBackground }}
           />
         </AnimatePresence>
@@ -305,9 +335,9 @@ export function WallCalendar() {
             className="overflow-hidden rounded-[20px] border border-slate-200/70 bg-[#fffdf8] print:rounded-none print:border-0"
             drag="y"
             dragConstraints={{ top: 0, bottom: 0 }}
-            dragElastic={0.18}
+            dragElastic={0.1}
             dragMomentum={false}
-            dragTransition={{ bounceStiffness: 220, bounceDamping: 22 }}
+            dragTransition={{ bounceStiffness: 180, bounceDamping: 20 }}
             whileTap={{ cursor: "grabbing", scale: 0.998 }}
             onDrag={(_, info) => dragY.set(info.offset.y)}
             onDragEnd={handleDragEnd}
@@ -320,57 +350,60 @@ export function WallCalendar() {
             }}
           >
             <div className="relative overflow-hidden bg-white [perspective:1800px]">
-              <AnimatePresence initial={false} custom={direction} mode="wait">
+              <AnimatePresence
+                initial={false}
+                custom={direction}
+                mode="wait"
+                onExitComplete={() => {
+                  setBackgroundMonth(visibleMonth);
+                }}
+              >
                 <motion.div
                   key={`${visibleMonth.getFullYear()}-${visibleMonth.getMonth()}`}
                   custom={direction}
                   style={{ transformStyle: "preserve-3d" }}
                   initial={{
-                    rotateX: direction >= 0 ? 86 : -86,
-                    opacity: 0.26,
-                    y: direction >= 0 ? -22 : 22,
-                    scale: 0.985,
-                    transformPerspective: 1800,
-                    filter: "blur(1.5px)"
+                    rotateX: direction >= 0 ? 78 : -78,
+                    opacity: 0.42,
+                    y: direction >= 0 ? -16 : 16,
+                    scale: 0.992,
+                    transformPerspective: 1800
                   }}
                   animate={{
                     rotateX: 0,
                     opacity: 1,
                     y: 0,
                     scale: 1,
-                    filter: "blur(0px)",
                     transition: {
                       rotateX: {
                         type: "spring",
-                        stiffness: 118,
-                        damping: 19,
-                        mass: 1.28
+                        stiffness: 88,
+                        damping: 18,
+                        mass: 1.18
                       },
                       y: {
                         type: "spring",
-                        stiffness: 124,
-                        damping: 18,
-                        mass: 1.15
+                        stiffness: 96,
+                        damping: 17,
+                        mass: 1.06
                       },
                       scale: {
                         type: "spring",
-                        stiffness: 130,
-                        damping: 20,
-                        mass: 1.04
+                        stiffness: 100,
+                        damping: 19,
+                        mass: 1
                       },
-                      opacity: { duration: 0.82, ease: [0.22, 1, 0.36, 1] },
-                      filter: { duration: 0.78, ease: "easeOut" }
+                      opacity: { duration: 0.56, ease: [0.22, 1, 0.36, 1] }
                     }
                   }}
                   exit={{
-                    rotateX: direction >= 0 ? -82 : 82,
-                    opacity: 0.08,
-                    y: direction >= 0 ? 24 : -24,
-                    scale: 0.985,
-                    filter: "blur(1px)",
+                    rotateX: direction >= 0 ? -72 : 72,
+                    opacity: 0.14,
+                    y: direction >= 0 ? 14 : -14,
+                    scale: 0.992,
                     transition: {
-                      duration: 0.72,
-                      ease: [0.4, 0, 0.2, 1]
+                      duration: 0.5,
+                      ease: [0.32, 0, 0.2, 1]
                     }
                   }}
                   className="origin-top will-change-transform"
@@ -400,7 +433,6 @@ export function WallCalendar() {
                       monthNote={monthNote}
                       rangeNote={rangeNote}
                       selectedRangeLabel={selectedRangeLabel}
-                      selectedRangeDates={selectedRangeDates}
                       importantDate={importantDate}
                       importantDateLabel={importantDateLabel}
                       selectionMode={selectionMode}
